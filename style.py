@@ -14,7 +14,7 @@ import torch.onnx
 
 import utils
 from transformer_net import TransformerNet
-from vgg import Vgg16
+from vgg import Vgg19
 import streamlit as st
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -34,7 +34,7 @@ def load_model(model_path):
         return style_model
 
 
-def stylize(style_model, content_image, output_image):
+def stylize(style_model, content_image, output_image, num_steps=500):
 
     content_image = utils.load_image(content_image)
     content_transform = transforms.Compose([
