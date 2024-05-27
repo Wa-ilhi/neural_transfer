@@ -16,19 +16,27 @@ import utils
 from transformer_net import TransformerNet
 from vgg import Vgg16
 
+# Function to check and create necessary directories
+
 
 def check_paths(args):
     try:
+        # Check and create the save model directory if it does not exist
         if not os.path.exists(args.save_model_dir):
             os.makedirs(args.save_model_dir)
+        # Check and create the checkpoint model directory if it does not exist and is provided
         if args.checkpoint_model_dir is not None and not (os.path.exists(args.checkpoint_model_dir)):
             os.makedirs(args.checkpoint_model_dir)
     except OSError as e:
+        # Print error message and exit if there is an OSError
         print(e)
         sys.exit(1)
 
+# Function to train the model
+
 
 def train(args):
+    # Set the device to GPU if available and requested, else use CPU
     if args.cuda:
         device = torch.device("cuda")
     elif args.mps:
@@ -36,34 +44,42 @@ def train(args):
     else:
         device = torch.device("cpu")
 
+    # Set random seed for reproducibility
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    # Define transformations for the training dataset
     transform = transforms.Compose([
         transforms.Resize(args.image_size),
         transforms.CenterCrop(args.image_size),
         transforms.ToTensor(),
         transforms.Lambda(lambda x: x.mul(255))
     ])
+    # Load the training dataset
     train_dataset = datasets.ImageFolder(args.dataset, transform)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size)
 
+    # Initialize the TransformerNet model and optimizer
     transformer = TransformerNet().to(device)
     optimizer = Adam(transformer.parameters(), args.lr)
     mse_loss = torch.nn.MSELoss()
 
+    # Load and prepare the VGG16 model for feature extraction
     vgg = Vgg16(requires_grad=False).to(device)
     style_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Lambda(lambda x: x.mul(255))
     ])
+    # Load and transform the style image
     style = utils.load_image(args.style_image, size=args.style_size)
     style = style_transform(style)
     style = style.repeat(args.batch_size, 1, 1, 1).to(device)
 
+    # Extract style features from the style image using VGG16
     features_style = vgg(utils.normalize_batch(style))
     gram_style = [utils.gram_matrix(y) for y in features_style]
 
+    # Training loop
     for e in range(args.epochs):
         transformer.train()
         agg_content_loss = 0.
@@ -80,41 +96,51 @@ def train(args):
             y = utils.normalize_batch(y)
             x = utils.normalize_batch(x)
 
+            # Extract features from the transformed image and original image
             features_y = vgg(y)
             features_x = vgg(x)
 
-            content_loss = args.content_weight * mse_loss(features_y.relu2_2, features_x.relu2_2)
+            # Calculate content loss
+            content_loss = args.content_weight * \
+                mse_loss(features_y.relu2_2, features_x.relu2_2)
 
+            # Calculate style loss
             style_loss = 0.
             for ft_y, gm_s in zip(features_y, gram_style):
                 gm_y = utils.gram_matrix(ft_y)
                 style_loss += mse_loss(gm_y, gm_s[:n_batch, :, :])
             style_loss *= args.style_weight
 
+            # Calculate total loss, backpropagate, and update the model weights
             total_loss = content_loss + style_loss
             total_loss.backward()
             optimizer.step()
 
+            # Aggregate losses for logging
             agg_content_loss += content_loss.item()
             agg_style_loss += style_loss.item()
 
+            # Log training progress at specified intervals
             if (batch_id + 1) % args.log_interval == 0:
                 mesg = "{}\tEpoch {}:\t[{}/{}]\tcontent: {:.6f}\tstyle: {:.6f}\ttotal: {:.6f}".format(
                     time.ctime(), e + 1, count, len(train_dataset),
-                                  agg_content_loss / (batch_id + 1),
-                                  agg_style_loss / (batch_id + 1),
-                                  (agg_content_loss + agg_style_loss) / (batch_id + 1)
+                    agg_content_loss / (batch_id + 1),
+                    agg_style_loss / (batch_id + 1),
+                    (agg_content_loss + agg_style_loss) / (batch_id + 1)
                 )
                 print(mesg)
 
+            # Save model checkpoints at specified intervals
             if args.checkpoint_model_dir is not None and (batch_id + 1) % args.checkpoint_interval == 0:
                 transformer.eval().cpu()
-                ckpt_model_filename = "ckpt_epoch_" + str(e) + "_batch_id_" + str(batch_id + 1) + ".pth"
-                ckpt_model_path = os.path.join(args.checkpoint_model_dir, ckpt_model_filename)
+                ckpt_model_filename = "ckpt_epoch_" + \
+                    str(e) + "_batch_id_" + str(batch_id + 1) + ".pth"
+                ckpt_model_path = os.path.join(
+                    args.checkpoint_model_dir, ckpt_model_filename)
                 torch.save(transformer.state_dict(), ckpt_model_path)
                 transformer.to(device).train()
 
-    # save model
+    # Save the final trained model
     transformer.eval().cpu()
     save_model_filename = "epoch_" + str(args.epochs) + "_" + str(time.ctime()).replace(' ', '_') + "_" + str(
         args.content_weight) + "_" + str(args.style_weight) + ".model"
@@ -123,11 +149,15 @@ def train(args):
 
     print("\nDone, trained model saved at", save_model_path)
 
+# Function to stylize an image using a trained model
+
 
 def stylize(args):
     device = torch.device("cuda" if args.cuda else "cpu")
 
-    content_image = utils.load_image(args.content_image, scale=args.content_scale)
+    # Load and transform the content image
+    content_image = utils.load_image(
+        args.content_image, scale=args.content_scale)
     content_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Lambda(lambda x: x.mul(255))
@@ -136,12 +166,14 @@ def stylize(args):
     content_image = content_image.unsqueeze(0).to(device)
 
     if args.model.endswith(".onnx"):
+        # If the model is in ONNX format, use ONNX runtime for inference
         output = stylize_onnx(content_image, args)
     else:
+        # Otherwise, use PyTorch for inference
         with torch.no_grad():
             style_model = TransformerNet()
             state_dict = torch.load(args.model)
-            # remove saved deprecated running_* keys in InstanceNorm from the checkpoint
+            # Remove deprecated running_* keys in InstanceNorm from the checkpoint
             for k in list(state_dict.keys()):
                 if re.search(r'in\d+\.running_(mean|var)$', k):
                     del state_dict[k]
@@ -149,26 +181,28 @@ def stylize(args):
             style_model.to(device)
             style_model.eval()
             if args.export_onnx:
-                assert args.export_onnx.endswith(".onnx"), "Export model file should end with .onnx"
+                # Export the model to ONNX format if requested
+                assert args.export_onnx.endswith(
+                    ".onnx"), "Export model file should end with .onnx"
                 output = torch.onnx._export(
                     style_model, content_image, args.export_onnx, opset_version=11,
-                ).cpu()            
+                ).cpu()
             else:
+                # Stylize the content image
                 output = style_model(content_image).cpu()
     utils.save_image(args.output_image, output[0])
 
+# Function to perform stylization using an ONNX model
+
 
 def stylize_onnx(content_image, args):
-    """
-    Read ONNX model and run it using onnxruntime
-    """
-
     assert not args.export_onnx
 
     import onnxruntime
 
     ort_session = onnxruntime.InferenceSession(args.model)
 
+    # Convert a PyTorch tensor to a NumPy array
     def to_numpy(tensor):
         return (
             tensor.detach().cpu().numpy()
@@ -182,12 +216,18 @@ def stylize_onnx(content_image, args):
 
     return torch.from_numpy(img_out_y)
 
+# Main function to parse arguments and call training or stylization functions
+
 
 def main():
-    main_arg_parser = argparse.ArgumentParser(description="parser for fast-neural-style")
-    subparsers = main_arg_parser.add_subparsers(title="subcommands", dest="subcommand")
+    main_arg_parser = argparse.ArgumentParser(
+        description="parser for fast-neural-style")
+    subparsers = main_arg_parser.add_subparsers(
+        title="subcommands", dest="subcommand")
 
-    train_arg_parser = subparsers.add_parser("train", help="parser for training arguments")
+    # Parser for training arguments
+    train_arg_parser = subparsers.add_parser(
+        "train", help="parser for training arguments")
     train_arg_parser.add_argument("--epochs", type=int, default=2,
                                   help="number of training epochs, default is 2")
     train_arg_parser.add_argument("--batch-size", type=int, default=4,
@@ -220,7 +260,9 @@ def main():
     train_arg_parser.add_argument("--checkpoint-interval", type=int, default=2000,
                                   help="number of batches after which a checkpoint of the trained model will be created")
 
-    eval_arg_parser = subparsers.add_parser("eval", help="parser for evaluation/stylizing arguments")
+    # Parser for evaluation/stylizing arguments
+    eval_arg_parser = subparsers.add_parser(
+        "eval", help="parser for evaluation/stylizing arguments")
     eval_arg_parser.add_argument("--content-image", type=str, required=True,
                                  help="path to content image you want to stylize")
     eval_arg_parser.add_argument("--content-scale", type=float, default=None,
@@ -233,19 +275,24 @@ def main():
                                  help="set it to 1 for running on cuda, 0 for CPU")
     eval_arg_parser.add_argument("--export_onnx", type=str,
                                  help="export ONNX model to a given file")
-    eval_arg_parser.add_argument('--mps', action='store_true', default=False, help='enable macOS GPU training')
+    eval_arg_parser.add_argument(
+        '--mps', action='store_true', default=False, help='enable macOS GPU training')
 
     args = main_arg_parser.parse_args()
 
+    # Ensure a subcommand (train or eval) is specified
     if args.subcommand is None:
         print("ERROR: specify either train or eval")
         sys.exit(1)
+    # Ensure CUDA is available if requested
     if args.cuda and not torch.cuda.is_available():
         print("ERROR: cuda is not available, try running on CPU")
         sys.exit(1)
+    # Warn if MPS is available but not enabled
     if not args.mps and torch.backends.mps.is_available():
         print("WARNING: mps is available, run with --mps to enable macOS GPU")
 
+    # Call the appropriate function based on the subcommand
     if args.subcommand == "train":
         check_paths(args)
         train(args)
@@ -253,5 +300,6 @@ def main():
         stylize(args)
 
 
+# Entry point of the script
 if __name__ == "__main__":
     main()

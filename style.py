@@ -17,7 +17,10 @@ from transformer_net import TransformerNet
 from vgg import Vgg19
 import streamlit as st
 
+# Check if a GPU is available and set the device accordingly
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Load the pre-trained model
 
 
 def load_model(model_path):
@@ -33,6 +36,8 @@ def load_model(model_path):
         style_model.eval()
         return style_model
 
+# Perform style transfer
+
 
 def stylize(style_model, content_image, output_image, num_steps=500):
 
@@ -43,7 +48,7 @@ def stylize(style_model, content_image, output_image, num_steps=500):
     ])
     content_image = content_transform(content_image)
     content_image = content_image.unsqueeze(0).to(device)
-
+    # Save the output image
     with torch.no_grad():
         output = style_model(content_image).cpu()
     utils.save_image(output_image, output[0])

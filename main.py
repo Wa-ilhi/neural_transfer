@@ -15,7 +15,7 @@ uploaded_file = st.sidebar.file_uploader(
 
 # Select style
 style_name = st.sidebar.selectbox(
-    "Select Style", ('candy', 'mosaic', 'rain-princess', 'udnie'))
+    "Select Style", ('candy', 'mosaic', 'rain_princess', 'udnie'))
 
 # Slider for adjusting quality
 num_steps = st.sidebar.slider(
@@ -49,7 +49,7 @@ if uploaded_file is not None:
             # Share on Social Media
             st.write("### Share on Social Media")
             facebook_url = "https://www.facebook.com/sharer/sharer.php?u=" + output_image_path
-            instagram_url = "https://www.instagram.com/"
+            instagram_url = "https://www.instagram.com/sharer/sharer.php?u=" + output_image_path
 
             st.markdown(
                 '<a href="' + facebook_url + '" target="_blank"><img src="https://upload.wikimedia.org/wikipedia/commons/5/51/Facebook_f_logo_%282019%29.svg" width="50" style="margin-right: 20px;"></a>'
